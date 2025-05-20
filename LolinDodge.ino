@@ -7,12 +7,10 @@
 #define TFT_DC  2
 #define CTL_INPUT A0 // Whoever thought making only 1 ADC port is a good idea...
 
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-
-
 // Output voltages respectable for given controls. We only
 // care about 2 keypresses at max, and also don't care when
 // UP+DOWN or LEFT+RIGHT keys are pressed at the same time.
+#define CTL_THRES 6 // <-- Tolerance, keep it below 10!
 #define CTL_L  560
 #define CTL_LU 842
 #define CTL_LD 938
@@ -21,12 +19,13 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 #define CTL_RD 924
 #define CTL_U  759
 #define CTL_D  908
-#define CTL_THRES 6 // <-- Noise tolerance, better keep <10
 
 #define DISPLAY_W 1280
 #define DISPLAY_H 1600
-#define MAX_FPS 30
+#define MAX_FPS 30 // Not like esp8266 can perform any faster anyway...
 #define BGC ST77XX_BLACK
+
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
 
 const uint16_t colors[] = {
@@ -59,35 +58,40 @@ struct InputData {
 };
 
 
-InputData processInput() {
+InputData processInput(unsigned short& accx, unsigned short& accy) {
     int input = analogRead(A0); // 0 -- 1024
-    // ax += ax/4; // Speed acceleration, turned out to be
-    // ay += ay/5; // a pretty bad idea for a bullet hell
+
+    accx = min(accx + accx/3, 180);
+    accy = min(accy + accy/4, 120);
 
     if ((input >= CTL_L-CTL_THRES) && (input <= CTL_L+CTL_THRES)) {
-        return { 30, 0, 0, 0 };
+        return { 20+(accx/3), 0, 0, 0 };
     }
     if ((input >= CTL_R-CTL_THRES) && (input <= CTL_R+CTL_THRES)) {
-        return { 0, 30, 0, 0 };
+        return { 0, 20+(accx/3), 0, 0 };
     }
     if ((input >= CTL_U-CTL_THRES) && (input <= CTL_U+CTL_THRES)) {
-        return { 0, 0, 30, 0 };
+        return { 0, 0, 20+(accy/4), 0 };
     }
     if ((input >= CTL_D-CTL_THRES) && (input <= CTL_D+CTL_THRES)) {
-        return { 0, 0, 0, 30 };
+        return { 0, 0, 0, 20+(accy/4) };
     }
     if ((input >= CTL_LU-CTL_THRES) && (input <= CTL_LU+CTL_THRES)) {
-        return { 17, 0, 17, 0 };
+        return { 14+(accx/3), 0, 14+(accy/4), 0 };
     }
     if ((input >= CTL_LD-CTL_THRES) && (input <= CTL_LD+CTL_THRES)) {
-        return { 17, 0, 0, 17 };
+        return { 14+(accx/3), 0, 0, 14+(accy/4) };
     }
     if ((input >= CTL_RU-CTL_THRES) && (input <= CTL_RU+CTL_THRES)) {
-        return { 0, 17, 17, 0 };
+        return { 0, 14+(accx/3), 14+(accy/4), 0 };
     }
     if ((input >= CTL_RD-CTL_THRES) && (input <= CTL_RD+CTL_THRES)) {
-        return { 0, 17, 0, 17 };
+        return { 0, 14+(accx/3), 0, 14+(accy/4) };
     }
+
+    // Don't change to init instantly in case of short keys release
+    accx = max(3, accx/2);
+    accy = max(4, accy/2);
 
     return { 0, 0, 0, 0 };
 }
@@ -150,7 +154,7 @@ void updateHero(Entity& hero, InputData inputs) {
     short ux = (hero.x + inputs.l - inputs.r);
     short uy = (hero.y + inputs.u - inputs.d);
 
-    hero.x = (ux + DISPLAY_W + hero.w) % (DISPLAY_W + hero.w);
+    hero.x = (ux + hero.w/2 + DISPLAY_W) % DISPLAY_W - hero.w/2;
     if (uy > 0 && uy < DISPLAY_H - hero.h) {
         hero.y = uy;
     }
@@ -169,16 +173,20 @@ void setup() {
 
 Entity hero = {
     DISPLAY_W/2 - 80,
-    320,
-    160, // 80,
-    160, // 80,
+    DISPLAY_H - 320,
+    80,
+    80,
     "sdfsdf",
     "none"
 };
 
+// TODO: move out acceleration logic to updateHero() so it
+// won't accumulate when hero is touching walls or collisions.
+unsigned short accx = 3;
+unsigned short accy = 4;
 
 void loop() {
-    InputData inputs = processInput();
+    InputData inputs = processInput(accx, accy);
     updateHero(hero, inputs);
 
     Serial.println(
@@ -188,6 +196,8 @@ void loop() {
         + ", D=" + String(inputs.d)
         + ", x=" + String(hero.x)
         + ", y=" + String(hero.y)
+        + ", x_a=" + String(accx)
+        + ", y_a=" + String(accy)
     );
 
     delay(1000 / MAX_FPS);
