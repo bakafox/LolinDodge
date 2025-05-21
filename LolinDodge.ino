@@ -10,7 +10,7 @@
 // Output voltages respectable for given controls. We only
 // care about 2 keypresses at max, and also don't care when
 // UP+DOWN or LEFT+RIGHT keys are pressed at the same time.
-#define CTL_THRES 6 // <-- Tolerance, keep it below 10!
+#define CTL_THRES 6 // <-- +/- tolerance, keep below 10!
 #define CTL_L  560
 #define CTL_LU 842
 #define CTL_LD 938
@@ -30,133 +30,142 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
 const uint16_t colors[] = {
     ST77XX_RED, ST77XX_GREEN, ST77XX_BLUE, ST77XX_WHITE,
-    ST77XX_CYAN, ST77XX_MAGENTA, ST77XX_ORANGE
+    ST77XX_YELLOW, ST77XX_CYAN, ST77XX_MAGENTA, ST77XX_ORANGE
 };
 const size_t numColors = sizeof(colors) / sizeof(colors[0]);
 unsigned int currColor = ST77XX_YELLOW;
 
 
-struct Entity {
+struct PosData {
     short x;
     short y;
-    short w;
-    short h;
-    String color;
-    String group;
-    String movement;
     short x_prev = 0;
     short y_prev = 0;
-    short w_prev = 0;
-    short h_prev = 0;
 };
 
-struct InputData {
-    unsigned char l;
-    unsigned char r;
-    unsigned char u;
-    unsigned char d;
+struct MovData {
+    signed char lr; // Negative = left, Positive = right
+    signed char ud; // Negative = up, Positive = down
+    unsigned char lr_a = 0;
+    unsigned char ud_a = 0;
+};
+
+struct Entity {
+    PosData pos;
+    MovData mov;
+    char w;
+    char h;
+    String type;
+};
+
+struct Bullet {
+    PosData pos;
+    MovData mov;
+    char s;
+    bool isRepulsive;
 };
 
 
-InputData processInput(unsigned short& accx, unsigned short& accy) {
+MovData processInput(MovData prevInput) {
     int input = analogRead(A0); // 0 -- 1024
 
-    accx = min(accx + accx/3, 180);
-    accy = min(accy + accy/4, 120);
+    unsigned char lr_a = min(
+        abs(prevInput.lr)/7 + prevInput.lr_a*4/3 + prevInput.ud_a/21,
+    180);
+    unsigned char ud_a = min(
+        abs(prevInput.ud)/7 + prevInput.ud_a*4/3 + prevInput.lr_a/21,
+    180);
 
     if ((input >= CTL_L-CTL_THRES) && (input <= CTL_L+CTL_THRES)) {
-        return { 20+(accx/3), 0, 0, 0 };
+        return MovData { 20 + lr_a/3, 0, lr_a, ud_a/2 };
     }
     if ((input >= CTL_R-CTL_THRES) && (input <= CTL_R+CTL_THRES)) {
-        return { 0, 20+(accx/3), 0, 0 };
+        return MovData { -20 - lr_a/3, 0, lr_a, ud_a/2 };
     }
     if ((input >= CTL_U-CTL_THRES) && (input <= CTL_U+CTL_THRES)) {
-        return { 0, 0, 20+(accy/4), 0 };
+        return MovData { 0, 20 + ud_a/3, lr_a/2, ud_a };
     }
     if ((input >= CTL_D-CTL_THRES) && (input <= CTL_D+CTL_THRES)) {
-        return { 0, 0, 0, 20+(accy/4) };
+        return MovData { 0, -20 - ud_a/3, lr_a/2, ud_a };
     }
     if ((input >= CTL_LU-CTL_THRES) && (input <= CTL_LU+CTL_THRES)) {
-        return { 14+(accx/3), 0, 14+(accy/4), 0 };
+        return MovData { 14 + lr_a/4, 14 + ud_a/4, lr_a, ud_a };
     }
     if ((input >= CTL_LD-CTL_THRES) && (input <= CTL_LD+CTL_THRES)) {
-        return { 14+(accx/3), 0, 0, 14+(accy/4) };
+        return MovData { 14 + lr_a/4, -14 - ud_a/4, lr_a, ud_a };
     }
     if ((input >= CTL_RU-CTL_THRES) && (input <= CTL_RU+CTL_THRES)) {
-        return { 0, 14+(accx/3), 14+(accy/4), 0 };
+        return MovData { -14 - lr_a/4, 14 + ud_a/4, lr_a, ud_a };
     }
     if ((input >= CTL_RD-CTL_THRES) && (input <= CTL_RD+CTL_THRES)) {
-        return { 0, 14+(accx/3), 0, 14+(accy/4) };
+        return MovData { -14 - lr_a/4, -14 - ud_a/4, lr_a, ud_a };
     }
 
-    // Don't change to init instantly in case of short keys release
-    accx = max(3, accx/2);
-    accy = max(4, accy/2);
-
-    return { 0, 0, 0, 0 };
+    return MovData { prevInput.lr/3, prevInput.ud/3, lr_a/2, ud_a/2 };
 }
 
 
 void redrawEntity(Entity& e) {
-    short dx = e.x - e.x_prev;
-    short dy = e.y - e.y_prev;
-    short dw = e.w_prev - e.w;
-    short dh = e.h_prev - e.h;
+    short dx = e.pos.x - e.pos.x_prev;
+    short dy = e.pos.y - e.pos.y_prev;
+
+    // if (e.type == "hero") {
+    //     tft.fillTriangle(
+    //         e.pos.x/10 - 2, e.pos.y/10 - 2,
+    //         e.pos.x/10 + e.w/2/10, e.pos.y/10 + e.h/10 + 2,
+    //         e.pos.x/10 + e.w/10 + 2, e.pos.y/10 - 2,
+    //     BGC);
+    //     tft.fillTriangle(
+    //         e.pos.x/10, e.pos.y/10,
+    //         e.pos.x/10 + e.w/2/10, e.pos.y/10 + e.h/10,
+    //         e.pos.x/10 + e.w/10, e.pos.y/10,
+    //     ST77XX_ORANGE);
+    // }
 
     if (dx != 0) {
         if (dx > 0) {
             tft.fillRect(
-                (e.x_prev)/10-1, (e.y_prev)/10-1, (dx+9)/10+1, (e.h_prev+9)/10+1,
+                (e.pos.x_prev)/10-1, (e.pos.y_prev)/10-1, (dx+9)/10+1, (e.h+9)/10+1,
             BGC);
         }
         else {
             tft.fillRect(
-                (e.x+e.w+9)/10-1, (e.y_prev+9)/10-1, (-dx)/10+1, (e.h_prev)/10+1,
+                (e.pos.x+e.w+9)/10-1, (e.pos.y_prev+9)/10-1, (-dx)/10+1, (e.h)/10+1,
             BGC);
         }
     }
     if (dy != 0) {
         if (dy > 0) {
             tft.fillRect(
-                (e.x_prev)/10-1, (e.y_prev)/10-1, (e.w_prev+9)/10+1, (dy+9)/10+1,
+                (e.pos.x_prev)/10-1, (e.pos.y_prev)/10-1, (e.w+9)/10+1, (dy+9)/10+1,
             BGC);
         }
         else {
             tft.fillRect(
-                (e.x_prev+9)/10-1, (e.y+e.w+9)/10-1, (e.w_prev)/10+1, (-dy)/10+1,
+                (e.pos.x_prev+9)/10-1, (e.pos.y+e.w+9)/10-1, (e.w)/10+1, (-dy)/10+1,
             BGC);
         }
     }
-    if (dw > 0) {
-        tft.fillRect(
-            (e.x+e.w)/10-1, (e.y_prev)/10-1, (dw)/10+1, (e.h_prev+9)/10+1,
-        BGC);
-    }
-    if (dh > 0) {
-        tft.fillRect(
-            (e.x_prev)/10-1, (e.y+e.h)/10-1, (e.w_prev+9)/10+1, (dh)/10+1,
-        BGC);
-    }
 
     tft.fillRect(
-        e.x / 10, e.y / 10, e.w / 10, e.h / 10,
+        e.pos.x / 10, e.pos.y / 10, e.w / 10, e.h / 10,
     currColor);
+
     currColor = colors[random(numColors)];
 
-    e.x_prev = e.x;
-    e.y_prev = e.y;
-    e.w_prev = e.w;
-    e.h_prev = e.h;
+    e.pos.x_prev = e.pos.x;
+    e.pos.y_prev = e.pos.y;
 }
 
 
-void updateHero(Entity& hero, InputData inputs) {
-    short ux = (hero.x + inputs.l - inputs.r);
-    short uy = (hero.y + inputs.u - inputs.d);
+void heroUpdatePos(Entity& hero) {
+    short ux = (hero.pos.x + hero.mov.lr);
+    short uy = (hero.pos.y + hero.mov.ud);
 
-    hero.x = (ux + hero.w/2 + DISPLAY_W) % DISPLAY_W - hero.w/2;
+    hero.pos.x = (ux + hero.w/2 + DISPLAY_W) % DISPLAY_W - hero.w/2;
+
     if (uy > 0 && uy < DISPLAY_H - hero.h) {
-        hero.y = uy;
+        hero.pos.y = uy;
     }
 
     redrawEntity(hero);
@@ -171,33 +180,28 @@ void setup() {
     tft.fillScreen(BGC);
 }
 
+
 Entity hero = {
-    DISPLAY_W/2 - 80,
-    DISPLAY_H - 320,
-    80,
-    80,
-    "sdfsdf",
-    "none"
+    { DISPLAY_W/2 - 80, DISPLAY_H - 320 },
+    { 0, 0 },
+    160, // 80 is too easy
+    160, // 80 is too easy
+    "hero"
 };
 
-// TODO: move out acceleration logic to updateHero() so it
-// won't accumulate when hero is touching walls or collisions.
-unsigned short accx = 3;
-unsigned short accy = 4;
+Entity enemies[20];
 
 void loop() {
-    InputData inputs = processInput(accx, accy);
-    updateHero(hero, inputs);
+    hero.mov = processInput(hero.mov);
+    heroUpdatePos(hero);
 
     Serial.println(
-        "L=" + String(inputs.l)
-        + ", R=" + String(inputs.r)
-        + ", U=" + String(inputs.u)
-        + ", D=" + String(inputs.d)
-        + ", x=" + String(hero.x)
-        + ", y=" + String(hero.y)
-        + ", x_a=" + String(accx)
-        + ", y_a=" + String(accy)
+        "LR=" + String(hero.mov.lr)
+        + ", UD=" + String(hero.mov.ud)
+        + ", LRA=" + String(hero.mov.lr_a)
+        + ", UDA=" + String(hero.mov.ud_a)
+        + ", x=" + String(hero.pos.x)
+        + ", y=" + String(hero.pos.y)
     );
 
     delay(1000 / MAX_FPS);

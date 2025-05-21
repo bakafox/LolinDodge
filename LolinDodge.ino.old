@@ -1,0 +1,81 @@
+#include <Adafruit_GFX.h>       
+#include <Adafruit_ST7735.h> 
+#include <SPI.h>
+
+#define TFT_CS  15
+#define TFT_RST 0
+#define TFT_DC  2
+#define CTL_INPUT A0 // Whoever thought making only 1 ADC port is a good idea...
+
+// Output voltages respectable for given controls. We only
+// care about 2 keypresses at max, and also don't care when
+// UP+DOWN or LEFT+RIGHT keys are pressed at the same time.
+#define CTL_THRES 6 // <-- +/- tolerance, keep below 10!
+#define CTL_L  560
+#define CTL_LU 842
+#define CTL_LD 938
+#define CTL_R  357
+#define CTL_RU 802
+#define CTL_RD 924
+#define CTL_U  759
+#define CTL_D  908
+
+#define SPP 10 // Steps Per Pixel, sort of like subpixels in SMB3
+#define DISPLAY_W 128 * SPP
+#define DISPLAY_H 160 * SPP
+#define MAX_FPS 30 // Not like esp8266 can perform any faster anyway...
+#define BGC ST77XX_BLACK
+
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+
+
+// 8*8 chunks, each containing 16*16px to draw (total 128*128px)
+unsigned char chunks[8] = {0};
+// Nth bit corresponds to Nth chunks; 1 means re-render is needed
+char chunksToBeUpdated = 0b0; // <-- 64 bit values in total
+
+void chunkRedraw(unsigned char chunkId) {
+    const unsigned char chunkCol = chunkId % 8;
+    const unsigned char chunkRow = chunkId / 8;
+
+    for (unsigned char i = 0; i < 16; i++) {
+        for (unsigned char j = 0; j < 16; j++) {
+            tft.drawPixel(chunkRow+i, chunkCol+j, ST77XX_WHITE);
+        }
+    }
+}
+
+void chunkSetToBeUpdated(unsigned char chunkId) {
+    return chunksToBeUpdated |= (0b1 << chunkId);
+}
+
+void chunkClearToBeUpdated(unsigned char chunkId) {
+    return chunksToBeUpdated &= ~(0b1 << chunkId);
+}
+
+void chunksCheckForUpdated() {
+    for (unsigned char i = 0; i < 8*8; i++) {
+        if ((chunksToBeUpdated >> i) & 0b1) {
+            Serial.println(i);
+            chunkRedraw(i);
+            chunkClearToBeUpdated(i);
+        }
+    }
+}
+
+
+void setup() {
+    Serial.begin(9600);
+
+    tft.initR(INITR_BLACKTAB);
+    tft.setRotation(0); // Set display to vertical
+    tft.fillScreen(BGC);
+
+    chunks[4] |= 172;
+    chunkSetToBeUpdated(4);
+}
+
+void loop() {
+    chunksCheckForUpdated();
+    delay(500);
+}
